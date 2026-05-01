@@ -141,8 +141,8 @@ def main():
     st.set_page_config(page_title=APP_TITLE, page_icon="🧼", layout="wide")
     init_state()
 
-    st.title("🧼 LangOps Sanitizer Pro")
-    st.caption("One tool to sanitize XLSX, CSV, XLIFF, XLF, TXLF, and XLZ localization files.")
+    st.title("🧼 LangOps Language Asset Sanitizer")
+    st.caption("One tool to sanitize XLSX, TMX, CSV, XLIFF, XLF, TXLF, and XLZ localization files.")
 
     settings = settings_sidebar()
 
