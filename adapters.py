@@ -233,38 +233,80 @@ def read_tmx(uploaded_file, start_id):
 
 
 def write_tmx(records):
+    import xml.etree.ElementTree as ET
+    from xml.dom import minidom
+    from io import BytesIO
+    from datetime import datetime, timezone
+
+    creationdate = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
     root = ET.Element("tmx", version="1.4")
 
     ET.SubElement(
         root,
         "header",
         {
-            "creationtool": "LangOps Sanitizer Pro",
+            "creationtool": "LangOps Converter",
             "creationtoolversion": "1.0",
-            "segtype": "sentence",
+            "segtype": "block",
+            "o-tmf": "OTC",
             "adminlang": "en-US",
             "srclang": records[0].source_lang if records else "en-US",
-            "datatype": "PlainText",
+            "datatype": "unknown",
+            "creationdate": creationdate
         }
     )
 
     body = ET.SubElement(root, "body")
 
     for idx, r in enumerate(records, start=1):
-        tu = ET.SubElement(body, "tu", {"tuid": r.unit_id or str(idx)})
 
-        tuv1 = ET.SubElement(tu, "tuv", {XML_LANG: r.source_lang})
+        tu = ET.SubElement(body, "tu")
+
+        ET.SubElement(
+            tu,
+            "prop",
+            {"type": "Txt::Domain"}
+        ).text = r.meta.get("domain", "sales_central")
+
+        ET.SubElement(
+            tu,
+            "prop",
+            {"type": "Txt::Product"}
+        ).text = r.meta.get("product", "sales_transcreation")
+
+        ET.SubElement(
+            tu,
+            "prop",
+            {"type": "Txt::Origin"}
+        ).text = r.meta.get(
+            "origin",
+            f"imported_from/{r.file_name}/row{idx}.spl"
+        )
+
+        tuv1 = ET.SubElement(
+            tu,
+            "tuv",
+            {"xml:lang": r.source_lang or "en-US"}
+        )
         seg1 = ET.SubElement(tuv1, "seg")
         seg1.text = r.source_text
 
-        tuv2 = ET.SubElement(tu, "tuv", {XML_LANG: r.target_lang})
+        tuv2 = ET.SubElement(
+            tu,
+            "tuv",
+            {"xml:lang": r.target_lang or "de-DE"}
+        )
         seg2 = ET.SubElement(tuv2, "seg")
         seg2.text = r.target_text
 
-    output = BytesIO()
-    ET.ElementTree(root).write(output, encoding="utf-8", xml_declaration=True)
+    xml_bytes = ET.tostring(root, encoding="utf-8")
+    pretty = minidom.parseString(xml_bytes).toprettyxml(
+        indent="    ",
+        encoding="utf-8"
+    )
 
-    return output.getvalue()
+    return pretty
 
 
 # ============================================================
