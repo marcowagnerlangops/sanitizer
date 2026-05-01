@@ -167,11 +167,11 @@ def main():
 
     with tabs[0]:
         st.subheader("Upload Files")
-        st.write("Supported formats: `.xlsx`, `.csv`, `.xlf`, `.xliff`, `.txlf`, `.xlz`")
+        st.write("Supported formats: XLSX, CSV, TMX, XLIFF, XLF, TXLF, XLZ")
 
         uploaded = st.file_uploader(
             "Upload one or multiple files",
-            type=["xlsx", "csv", "xlf", "xliff", "txlf", "xlz"],
+            type=["xlsx","csv","tmx","xlf","xliff","txlf","xlz"],
             accept_multiple_files=True,
         )
 
