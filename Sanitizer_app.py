@@ -54,7 +54,7 @@ def settings_sidebar() -> SanitizerSettings:
     st.sidebar.subheader("Flag-Only QA Checks")
     flag_tag_issues = st.sidebar.checkbox("Flag malformed/unbalanced tags", value=True)
     flag_source_equals_target = st.sidebar.checkbox("Flag target equals source", value=True)
-    flag_german_micro_qa = st.sidebar.checkbox("Flag German micro-QA issues", value=True)
+    flag_german_micro_qa = st.sidebar.checkbox("Flag German micro-QA issues", value=False)
     flag_brand_protection = st.sidebar.checkbox("Flag brand / do-not-translate issues", value=True)
     flag_placeholder_issues = st.sidebar.checkbox("Flag placeholder mismatch", value=True)
     flag_number_issues = st.sidebar.checkbox("Flag number mismatch", value=True)
