@@ -1,8 +1,7 @@
-# app.py
-
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 
@@ -23,7 +22,7 @@ from sanitizer_core import (
 # ============================================================
 
 APP_TITLE = "LangOps Sanitizer Pro"
-APP_VERSION = "2.0"
+APP_VERSION = "3.0"
 MAKER_LINE = "Made by LangOps Solutions"
 
 
@@ -49,22 +48,18 @@ def init_state():
 
 
 def log(msg):
-    from datetime import datetime
     stamp = datetime.now().strftime("%H:%M:%S")
     st.session_state.logs.append(f"[{stamp}] {msg}")
 
 
 # ============================================================
-# SIDEBAR SETTINGS
+# SETTINGS
 # ============================================================
 
 def sidebar_settings():
 
     st.sidebar.header("Sanitizer Settings")
 
-    # -------------------------------
-    # Safe Auto Repairs
-    # -------------------------------
     st.sidebar.subheader("Safe Auto Repairs")
 
     normalize_unicode = st.sidebar.checkbox("Normalize Unicode", True)
@@ -74,21 +69,17 @@ def sidebar_settings():
     collapse_spaces = st.sidebar.checkbox("Collapse Repeated Spaces", True)
     normalize_language_codes = st.sidebar.checkbox("Normalize Language Codes", True)
 
-    # -------------------------------
-    # QA Checks
-    # -------------------------------
     st.sidebar.subheader("QA Checks")
 
     flag_tag_issues = st.sidebar.checkbox("Malformed Tags", True)
     flag_source_equals_target = st.sidebar.checkbox("Source = Target", True)
-    flag_german_micro_qa = st.sidebar.checkbox("German Micro QA", False)
+    flag_german_micro_qa = st.sidebar.checkbox("German Micro QA", True)
     flag_brand_protection = st.sidebar.checkbox("Brand Protection", True)
     flag_placeholder_issues = st.sidebar.checkbox("Placeholder Mismatch", True)
     flag_number_issues = st.sidebar.checkbox("Number Mismatch", True)
     flag_punctuation_issues = st.sidebar.checkbox("Punctuation Mismatch", True)
     flag_length_ratio = st.sidebar.checkbox("Suspicious Length Ratio", True)
 
-    # NEW
     flag_double_ellipsis = st.sidebar.checkbox("Repeated Ellipsis / ....", True)
     flag_double_spaces = st.sidebar.checkbox("Double Spaces", True)
     flag_double_dot = st.sidebar.checkbox("Double Dot ..", True)
@@ -121,7 +112,7 @@ def sidebar_settings():
 
 
 # ============================================================
-# QA RUN
+# QA
 # ============================================================
 
 def rerun_qa(settings):
@@ -129,10 +120,12 @@ def rerun_qa(settings):
         st.session_state.records,
         settings,
         st.session_state.brand_rules,
-        st.session_state.glossary_rules,
+        st.session_state.glossary_rules
     )
 
-    st.session_state.stats = build_stats(st.session_state.records)
+    st.session_state.stats = build_stats(
+        st.session_state.records
+    )
 
 
 # ============================================================
@@ -163,6 +156,18 @@ def filter_dataframe(df):
         with c3:
             search = st.text_input("Search")
 
+        categories = sorted({
+            cat.strip()
+            for val in df["Issue Categories"].fillna("")
+            for cat in str(val).split(";")
+            if cat.strip()
+        })
+
+        category = st.selectbox(
+            "Issue Category",
+            ["All"] + categories
+        )
+
     out = df.copy()
 
     if severity != "All":
@@ -170,6 +175,13 @@ def filter_dataframe(df):
 
     if file_type != "All":
         out = out[out["Type"] == file_type]
+
+    if category != "All":
+        out = out[
+            out["Issue Categories"]
+            .fillna("")
+            .str.contains(category, case=False, regex=False)
+        ]
 
     if search.strip():
         needle = search.lower()
@@ -186,7 +198,7 @@ def filter_dataframe(df):
 
 
 # ============================================================
-# FILE LOADER
+# LOAD FILES
 # ============================================================
 
 def parse_uploaded_files(uploaded_files, src_lang, tgt_lang):
@@ -206,11 +218,53 @@ def parse_uploaded_files(uploaded_files, src_lang, tgt_lang):
         all_records.extend(records)
 
         if records:
-            next_id = max(x.record_id for x in all_records) + 1
+            next_id = max(
+                x.record_id for x in all_records
+            ) + 1
 
         log(f"Loaded {file.name}: {len(records)} segments")
 
     return all_records
+
+
+# ============================================================
+# MERGE HELPERS
+# ============================================================
+
+def dedupe_records(records, mode):
+
+    if mode == "No Deduplication":
+        return records
+
+    result = []
+    seen = set()
+
+    for r in records:
+
+        if mode == "Source + Target":
+            key = (
+                r.source_lang,
+                r.target_lang,
+                r.source_text.strip(),
+                r.target_text.strip()
+            )
+
+        elif mode == "Source Only":
+            key = (
+                r.source_lang,
+                r.source_text.strip()
+            )
+
+        else:
+            key = (
+                r.record_id
+            )
+
+        if key not in seen:
+            seen.add(key)
+            result.append(r)
+
+    return result
 
 
 # ============================================================
@@ -230,13 +284,13 @@ def main():
     st.title("🧼 LangOps Sanitizer Pro")
 
     st.caption(
-        "One tool to sanitize TMX, XLSX, CSV, XLIFF, XLF, TXLF, and XLZ localization files."
+        "Clean, QA, merge and export TMX, XLSX, CSV, XLIFF, XLF, TXLF and XLZ localization assets."
     )
 
     settings = sidebar_settings()
 
     # ========================================================
-    # BRAND FILE
+    # BRAND RULES
     # ========================================================
 
     st.sidebar.divider()
@@ -245,10 +299,10 @@ def main():
     brand_file = st.sidebar.file_uploader(
         "Upload Brand Rules XLSX / CSV",
         type=["xlsx", "csv"],
-        key="brand_upload"
+        key="brand"
     )
 
-    if brand_file is not None:
+    if brand_file:
         try:
             if brand_file.name.lower().endswith(".csv"):
                 df = pd.read_csv(brand_file, header=None)
@@ -256,14 +310,13 @@ def main():
                 df = pd.read_excel(brand_file, header=None)
 
             count = st.session_state.brand_rules.load_from_dataframe(df)
-
-            st.sidebar.success(f"Loaded {count} brand rules")
+            st.sidebar.success(f"{count} brand rules loaded")
 
         except Exception as exc:
             st.sidebar.error(str(exc))
 
     # ========================================================
-    # GLOSSARY FILE
+    # GLOSSARY
     # ========================================================
 
     st.sidebar.divider()
@@ -272,10 +325,10 @@ def main():
     glossary_file = st.sidebar.file_uploader(
         "Upload Glossary XLSX / CSV",
         type=["xlsx", "csv"],
-        key="glossary_upload"
+        key="glossary"
     )
 
-    if glossary_file is not None:
+    if glossary_file:
         try:
             if glossary_file.name.lower().endswith(".csv"):
                 df = pd.read_csv(glossary_file, header=None)
@@ -283,8 +336,7 @@ def main():
                 df = pd.read_excel(glossary_file, header=None)
 
             count = st.session_state.glossary_rules.load_from_dataframe(df)
-
-            st.sidebar.success(f"Loaded {count} glossary terms")
+            st.sidebar.success(f"{count} glossary terms loaded")
 
         except Exception as exc:
             st.sidebar.error(str(exc))
@@ -300,6 +352,7 @@ def main():
         "Upload & Analyze",
         "Dashboard",
         "Segments",
+        "Merge Center",
         "Export",
         "Logs"
     ])
@@ -313,7 +366,7 @@ def main():
         st.subheader("Upload Files")
 
         uploaded = st.file_uploader(
-            "Upload files",
+            "Upload one or multiple files",
             type=[
                 "tmx",
                 "xlsx",
@@ -397,7 +450,6 @@ def main():
                 st.session_state.glossary_rules = GlossaryRules()
 
                 st.success("Project cleared")
-
                 st.rerun()
 
     # ========================================================
@@ -408,6 +460,7 @@ def main():
 
         if not st.session_state.records:
             st.info("No project loaded.")
+
         else:
 
             stats = st.session_state.stats
@@ -425,14 +478,19 @@ def main():
             st.divider()
 
             if stats["issue_categories"]:
+
                 st.subheader("Issue Categories")
 
-                df = pd.DataFrame(
+                chart = pd.DataFrame(
                     stats["issue_categories"].items(),
                     columns=["Category", "Count"]
                 )
 
-                st.bar_chart(df, x="Category", y="Count")
+                st.bar_chart(
+                    chart,
+                    x="Category",
+                    y="Count"
+                )
 
     # ========================================================
     # SEGMENTS
@@ -441,7 +499,7 @@ def main():
     with tabs[2]:
 
         if not st.session_state.records:
-            st.info("No records.")
+            st.info("No records loaded.")
         else:
 
             df = records_to_dataframe(
@@ -454,17 +512,76 @@ def main():
                 filtered,
                 use_container_width=True,
                 hide_index=True,
-                height=700
+                height=720
+            )
+
+    # ========================================================
+    # MERGE CENTER
+    # ========================================================
+
+    with tabs[3]:
+
+        if not st.session_state.records:
+            st.info("Load files first.")
+        else:
+
+            st.subheader("Merge Center")
+
+            st.write(
+                "Merge all loaded files into one clean export."
+            )
+
+            dedupe_mode = st.selectbox(
+                "Deduplication",
+                [
+                    "No Deduplication",
+                    "Source + Target",
+                    "Source Only"
+                ]
+            )
+
+            export_type = st.selectbox(
+                "Merged Export Format",
+                [
+                    "tmx",
+                    "xlsx",
+                    "csv",
+                    "xliff"
+                ]
+            )
+
+            merged = dedupe_records(
+                st.session_state.records,
+                dedupe_mode
+            )
+
+            st.info(
+                f"Loaded records: {len(st.session_state.records)} | "
+                f"After merge rules: {len(merged)}"
+            )
+
+            data, name, mime = write_by_type(
+                merged,
+                export_type
+            )
+
+            st.download_button(
+                f"Download Merged {export_type.upper()}",
+                data=data,
+                file_name=f"merged_{name}",
+                mime=mime,
+                use_container_width=True
             )
 
     # ========================================================
     # EXPORT
     # ========================================================
 
-    with tabs[3]:
+    with tabs[4]:
 
         if not st.session_state.records:
             st.info("Nothing to export.")
+
         else:
 
             report = build_xlsx_report(
@@ -482,12 +599,12 @@ def main():
 
             st.divider()
 
-            by_type = defaultdict(list)
+            grouped = defaultdict(list)
 
             for r in st.session_state.records:
-                by_type[r.file_type].append(r)
+                grouped[r.file_type].append(r)
 
-            for file_type, group in by_type.items():
+            for file_type, group in grouped.items():
 
                 data, name, mime = write_by_type(
                     group,
@@ -506,12 +623,12 @@ def main():
     # LOGS
     # ========================================================
 
-    with tabs[4]:
+    with tabs[5]:
 
         st.text_area(
             "Logs",
             "\n".join(st.session_state.logs),
-            height=700
+            height=720
         )
 
 
