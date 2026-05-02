@@ -1,8 +1,8 @@
+# app.py
+
 from __future__ import annotations
 
 from collections import defaultdict
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
@@ -10,56 +10,90 @@ from adapters import read_any, write_by_type
 from exporters import build_xlsx_report
 from sanitizer_core import (
     BrandRules,
+    GlossaryRules,
     QAEngine,
     RepairEngine,
     SanitizerSettings,
-    SegmentRecord,
     build_stats,
     records_to_dataframe,
 )
 
+# ============================================================
+# CONFIG
+# ============================================================
 
 APP_TITLE = "LangOps Sanitizer Pro"
-APP_VERSION = "0.1.0"
+APP_VERSION = "2.0"
 MAKER_LINE = "Made by LangOps Solutions"
 
+
+# ============================================================
+# SESSION STATE
+# ============================================================
 
 def init_state():
     if "records" not in st.session_state:
         st.session_state.records = []
+
     if "stats" not in st.session_state:
         st.session_state.stats = {}
+
     if "brand_rules" not in st.session_state:
         st.session_state.brand_rules = BrandRules()
+
+    if "glossary_rules" not in st.session_state:
+        st.session_state.glossary_rules = GlossaryRules()
+
     if "logs" not in st.session_state:
         st.session_state.logs = []
 
 
-def log(msg: str):
+def log(msg):
     from datetime import datetime
-    st.session_state.logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    stamp = datetime.now().strftime("%H:%M:%S")
+    st.session_state.logs.append(f"[{stamp}] {msg}")
 
 
-def settings_sidebar() -> SanitizerSettings:
+# ============================================================
+# SIDEBAR SETTINGS
+# ============================================================
+
+def sidebar_settings():
+
     st.sidebar.header("Sanitizer Settings")
 
-    st.sidebar.subheader("Safe Auto-Repairs")
-    normalize_unicode = st.sidebar.checkbox("Normalize Unicode NFC", value=True)
-    trim_spaces = st.sidebar.checkbox("Trim leading/trailing spaces", value=True)
-    remove_zero_width = st.sidebar.checkbox("Remove zero-width characters", value=True)
-    replace_nbsp = st.sidebar.checkbox("Replace non-breaking spaces", value=True)
-    collapse_spaces = st.sidebar.checkbox("Collapse repeated spaces", value=True)
-    normalize_language_codes = st.sidebar.checkbox("Normalize language codes", value=True)
+    # -------------------------------
+    # Safe Auto Repairs
+    # -------------------------------
+    st.sidebar.subheader("Safe Auto Repairs")
 
-    st.sidebar.subheader("Flag-Only QA Checks")
-    flag_tag_issues = st.sidebar.checkbox("Flag malformed/unbalanced tags", value=True)
-    flag_source_equals_target = st.sidebar.checkbox("Flag target equals source", value=True)
-    flag_german_micro_qa = st.sidebar.checkbox("Flag German micro-QA issues", value=False)
-    flag_brand_protection = st.sidebar.checkbox("Flag brand / do-not-translate issues", value=True)
-    flag_placeholder_issues = st.sidebar.checkbox("Flag placeholder mismatch", value=True)
-    flag_number_issues = st.sidebar.checkbox("Flag number mismatch", value=True)
-    flag_punctuation_issues = st.sidebar.checkbox("Flag punctuation mismatch", value=True)
-    flag_length_ratio = st.sidebar.checkbox("Flag suspicious length ratio", value=True)
+    normalize_unicode = st.sidebar.checkbox("Normalize Unicode", True)
+    trim_spaces = st.sidebar.checkbox("Trim Spaces", True)
+    remove_zero_width = st.sidebar.checkbox("Remove Zero Width", True)
+    replace_nbsp = st.sidebar.checkbox("Replace NBSP", True)
+    collapse_spaces = st.sidebar.checkbox("Collapse Repeated Spaces", True)
+    normalize_language_codes = st.sidebar.checkbox("Normalize Language Codes", True)
+
+    # -------------------------------
+    # QA Checks
+    # -------------------------------
+    st.sidebar.subheader("QA Checks")
+
+    flag_tag_issues = st.sidebar.checkbox("Malformed Tags", True)
+    flag_source_equals_target = st.sidebar.checkbox("Source = Target", True)
+    flag_german_micro_qa = st.sidebar.checkbox("German Micro QA", True)
+    flag_brand_protection = st.sidebar.checkbox("Brand Protection", True)
+    flag_placeholder_issues = st.sidebar.checkbox("Placeholder Mismatch", True)
+    flag_number_issues = st.sidebar.checkbox("Number Mismatch", True)
+    flag_punctuation_issues = st.sidebar.checkbox("Punctuation Mismatch", True)
+    flag_length_ratio = st.sidebar.checkbox("Suspicious Length Ratio", True)
+
+    # NEW
+    flag_double_ellipsis = st.sidebar.checkbox("Repeated Ellipsis / ....", True)
+    flag_double_spaces = st.sidebar.checkbox("Double Spaces", True)
+    flag_double_dot = st.sidebar.checkbox("Double Dot ..", True)
+    flag_space_before_period = st.sidebar.checkbox("Space Before Period", True)
+    flag_glossary_violations = st.sidebar.checkbox("Glossary Violations", True)
 
     return SanitizerSettings(
         normalize_unicode=normalize_unicode,
@@ -68,6 +102,7 @@ def settings_sidebar() -> SanitizerSettings:
         replace_nbsp=replace_nbsp,
         collapse_spaces=collapse_spaces,
         normalize_language_codes=normalize_language_codes,
+
         flag_tag_issues=flag_tag_issues,
         flag_source_equals_target=flag_source_equals_target,
         flag_german_micro_qa=flag_german_micro_qa,
@@ -76,29 +111,57 @@ def settings_sidebar() -> SanitizerSettings:
         flag_number_issues=flag_number_issues,
         flag_punctuation_issues=flag_punctuation_issues,
         flag_length_ratio=flag_length_ratio,
+
+        flag_double_ellipsis=flag_double_ellipsis,
+        flag_double_spaces=flag_double_spaces,
+        flag_double_dot=flag_double_dot,
+        flag_space_before_period=flag_space_before_period,
+        flag_glossary_violations=flag_glossary_violations,
     )
 
 
-def rerun_qa(settings: SanitizerSettings):
-    QAEngine.apply(st.session_state.records, settings, st.session_state.brand_rules)
+# ============================================================
+# QA RUN
+# ============================================================
+
+def rerun_qa(settings):
+    QAEngine.apply(
+        st.session_state.records,
+        settings,
+        st.session_state.brand_rules,
+        st.session_state.glossary_rules,
+    )
+
     st.session_state.stats = build_stats(st.session_state.records)
 
 
-def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+# ============================================================
+# FILTER TABLE
+# ============================================================
+
+def filter_dataframe(df):
+
     if df.empty:
         return df
 
     with st.expander("Filters", expanded=True):
+
         c1, c2, c3 = st.columns(3)
+
         with c1:
-            severity = st.selectbox("Severity", ["All", "Issues", "OK"])
+            severity = st.selectbox(
+                "Severity",
+                ["All", "Issues", "OK"]
+            )
+
         with c2:
-            file_type = st.selectbox("File Type", ["All"] + sorted(df["Type"].dropna().unique().tolist()))
+            file_type = st.selectbox(
+                "File Type",
+                ["All"] + sorted(df["Type"].dropna().unique().tolist())
+            )
+
         with c3:
             search = st.text_input("Search")
-
-        categories = sorted({cat.strip() for val in df["Issue Categories"].fillna("") for cat in str(val).split(";") if cat.strip()})
-        category = st.selectbox("Issue Category", ["All"] + categories)
 
     out = df.copy()
 
@@ -108,273 +171,353 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if file_type != "All":
         out = out[out["Type"] == file_type]
 
-    if category != "All":
-        out = out[out["Issue Categories"].fillna("").str.contains(category, case=False, regex=False)]
-
     if search.strip():
-        needle = search.strip().lower()
+        needle = search.lower()
+
         out = out[
-            out["File"].fillna("").str.lower().str.contains(needle, regex=False)
-            | out["Source"].fillna("").str.lower().str.contains(needle, regex=False)
-            | out["Target"].fillna("").str.lower().str.contains(needle, regex=False)
-            | out["Issue Details"].fillna("").str.lower().str.contains(needle, regex=False)
+            out["Source"].astype(str).str.lower().str.contains(needle)
+            |
+            out["Target"].astype(str).str.lower().str.contains(needle)
+            |
+            out["Issue Details"].astype(str).str.lower().str.contains(needle)
         ]
 
     return out
 
 
-def parse_uploaded_files(uploaded_files, source_lang: str, target_lang: str) -> list[SegmentRecord]:
+# ============================================================
+# FILE LOADER
+# ============================================================
+
+def parse_uploaded_files(uploaded_files, src_lang, tgt_lang):
+
     all_records = []
     next_id = 1
 
-    for uploaded in uploaded_files:
-        records, meta = read_any(uploaded, next_id, source_lang, target_lang)
+    for file in uploaded_files:
+
+        records, meta = read_any(
+            file,
+            next_id,
+            src_lang,
+            tgt_lang
+        )
+
         all_records.extend(records)
+
         if records:
-            next_id = max(r.record_id for r in all_records) + 1
-        log(f"Loaded {uploaded.name}: {len(records)} segments")
+            next_id = max(x.record_id for x in all_records) + 1
+
+        log(f"Loaded {file.name}: {len(records)} segments")
 
     return all_records
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
-    st.set_page_config(page_title=APP_TITLE, page_icon="🧼", layout="wide")
+
+    st.set_page_config(
+        page_title=APP_TITLE,
+        page_icon="🧼",
+        layout="wide"
+    )
+
     init_state()
 
-    st.title("🧼 LangOps Language Asset Sanitizer")
-    st.caption("One tool to sanitize XLSX, TMX, CSV, XLIFF, XLF, TXLF, and XLZ localization files.")
+    st.title("🧼 LangOps Sanitizer Pro")
 
-    settings = settings_sidebar()
+    st.caption(
+        "One tool to sanitize TMX, XLSX, CSV, XLIFF, XLF, TXLF, and XLZ localization files."
+    )
+
+    settings = sidebar_settings()
+
+    # ========================================================
+    # BRAND FILE
+    # ========================================================
 
     st.sidebar.divider()
-    st.sidebar.subheader("Brand Protection Rules")
-    brand_file = st.sidebar.file_uploader("Upload Do Not Translate XLSX/CSV", type=["xlsx", "csv"])
+    st.sidebar.subheader("Brand Protection")
+
+    brand_file = st.sidebar.file_uploader(
+        "Upload Brand Rules XLSX / CSV",
+        type=["xlsx", "csv"],
+        key="brand_upload"
+    )
+
     if brand_file is not None:
         try:
             if brand_file.name.lower().endswith(".csv"):
-                df = pd.read_csv(brand_file)
+                df = pd.read_csv(brand_file, header=None)
             else:
                 df = pd.read_excel(brand_file, header=None)
+
             count = st.session_state.brand_rules.load_from_dataframe(df)
-            st.sidebar.success(f"Loaded {count} protected term rules.")
+
+            st.sidebar.success(f"Loaded {count} brand rules")
+
+        except Exception as exc:
+            st.sidebar.error(str(exc))
+
+    # ========================================================
+    # GLOSSARY FILE
+    # ========================================================
+
+    st.sidebar.divider()
+    st.sidebar.subheader("Glossary")
+
+    glossary_file = st.sidebar.file_uploader(
+        "Upload Glossary XLSX / CSV",
+        type=["xlsx", "csv"],
+        key="glossary_upload"
+    )
+
+    if glossary_file is not None:
+        try:
+            if glossary_file.name.lower().endswith(".csv"):
+                df = pd.read_csv(glossary_file, header=None)
+            else:
+                df = pd.read_excel(glossary_file, header=None)
+
+            count = st.session_state.glossary_rules.load_from_dataframe(df)
+
+            st.sidebar.success(f"Loaded {count} glossary terms")
+
         except Exception as exc:
             st.sidebar.error(str(exc))
 
     st.sidebar.divider()
     st.sidebar.caption(f"{MAKER_LINE} · v{APP_VERSION}")
 
-    tabs = st.tabs(["Upload & Analyze", "Dashboard", "Segments", "Duplicates", "Edit", "Export", "Logs"])
+    # ========================================================
+    # TABS
+    # ========================================================
+
+    tabs = st.tabs([
+        "Upload & Analyze",
+        "Dashboard",
+        "Segments",
+        "Export",
+        "Logs"
+    ])
+
+    # ========================================================
+    # TAB 1
+    # ========================================================
 
     with tabs[0]:
+
         st.subheader("Upload Files")
-        st.write("Supported formats: XLSX, CSV, TMX, XLIFF, XLF, TXLF, XLZ")
 
         uploaded = st.file_uploader(
-            "Upload one or multiple files",
-            type=["xlsx","csv","tmx","xlf","xliff","txlf","xlz"],
-            accept_multiple_files=True,
+            "Upload files",
+            type=[
+                "tmx",
+                "xlsx",
+                "csv",
+                "xlf",
+                "xliff",
+                "txlf",
+                "xlz"
+            ],
+            accept_multiple_files=True
         )
 
         c1, c2 = st.columns(2)
+
         with c1:
-            source_lang = st.text_input("Default source language for XLSX/CSV", value="en-US")
+            src_lang = st.text_input(
+                "Default Source Language",
+                "en-US"
+            )
+
         with c2:
-            target_lang = st.text_input("Default target language for XLSX/CSV", value="de-DE")
+            tgt_lang = st.text_input(
+                "Default Target Language",
+                "de-DE"
+            )
 
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            if st.button("Analyze Files", type="primary", use_container_width=True):
+            if st.button("Analyze Files", use_container_width=True):
+
                 if not uploaded:
-                    st.warning("Please upload at least one file.")
+                    st.warning("Upload files first.")
                 else:
                     try:
-                        with st.spinner("Reading files and running sanitizer..."):
-                            st.session_state.records = parse_uploaded_files(uploaded, source_lang, target_lang)
-                            changed = RepairEngine.apply(st.session_state.records, settings)
+                        with st.spinner("Analyzing..."):
+
+                            st.session_state.records = parse_uploaded_files(
+                                uploaded,
+                                src_lang,
+                                tgt_lang
+                            )
+
+                            changed = RepairEngine.apply(
+                                st.session_state.records,
+                                settings
+                            )
+
                             rerun_qa(settings)
-                            log(f"Analysis complete. Records: {len(st.session_state.records)}. Auto-repaired: {changed}.")
-                        st.success(f"Loaded {len(st.session_state.records)} segments.")
+
+                            log(
+                                f"Analysis complete | "
+                                f"{len(st.session_state.records)} segments | "
+                                f"{changed} repaired"
+                            )
+
+                        st.success("Analysis complete.")
+
                     except Exception as exc:
                         st.error(str(exc))
-                        log(f"Error: {exc}")
 
         with c2:
-            if st.button("Run Selected Auto-Repairs", use_container_width=True):
-                if not st.session_state.records:
-                    st.warning("Analyze files first.")
-                else:
-                    changed = RepairEngine.apply(st.session_state.records, settings)
-                    rerun_qa(settings)
-                    log(f"Auto-repairs run. Changed records: {changed}.")
-                    st.success(f"Auto-repairs complete. Changed {changed} records.")
+            if st.button("Run Auto Repairs", use_container_width=True):
+
+                changed = RepairEngine.apply(
+                    st.session_state.records,
+                    settings
+                )
+
+                rerun_qa(settings)
+
+                st.success(f"{changed} segments updated")
 
         with c3:
             if st.button("Clear Project", use_container_width=True):
+
                 st.session_state.records = []
                 st.session_state.stats = {}
                 st.session_state.logs = []
                 st.session_state.brand_rules = BrandRules()
-                st.success("Project cleared.")
+                st.session_state.glossary_rules = GlossaryRules()
+
+                st.success("Project cleared")
+
                 st.rerun()
 
-        st.info(
-            "This tool intentionally flags risky problems instead of automatically rewriting them. "
-            "Only selected safe repairs are applied automatically."
-        )
+    # ========================================================
+    # DASHBOARD
+    # ========================================================
 
     with tabs[1]:
-        records = st.session_state.records
-        stats = st.session_state.stats
 
-        if not records:
-            st.info("Upload and analyze files first.")
-        else:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Segments", stats.get("total_segments", 0))
-            c2.metric("Segments with Issues", stats.get("segments_with_issues", 0))
-            c3.metric("Clean Segments", stats.get("clean_segments", 0))
-            c4.metric("Brand Rules", len(st.session_state.brand_rules.rules))
-
-            st.divider()
-            c1, c2 = st.columns(2)
-
-            with c1:
-                issue_categories = stats.get("issue_categories", {})
-                if issue_categories:
-                    st.subheader("Issue Categories")
-                    chart_df = pd.DataFrame(issue_categories.items(), columns=["Category", "Count"])
-                    st.bar_chart(chart_df, x="Category", y="Count")
-
-            with c2:
-                file_types = stats.get("file_types", {})
-                if file_types:
-                    st.subheader("File Types")
-                    st.dataframe(pd.DataFrame(file_types.items(), columns=["Type", "Count"]), use_container_width=True, hide_index=True)
-
-            st.subheader("Duplicate Summary")
-            st.json(stats.get("duplicate_summary", {}))
-
-    with tabs[2]:
         if not st.session_state.records:
-            st.info("No records loaded.")
+            st.info("No project loaded.")
         else:
-            df = records_to_dataframe(st.session_state.records)
-            filtered = filter_dataframe(df)
-            st.caption(f"Showing {len(filtered)} of {len(df)} records.")
-            st.dataframe(filtered, use_container_width=True, hide_index=True, height=620)
 
-    with tabs[3]:
-        records = st.session_state.records
-        if not records:
-            st.info("No records loaded.")
-        else:
-            groups = defaultdict(list)
-            for r in records:
-                groups[(r.file_type, r.source_lang, r.target_lang, r.source_text)].append(r)
-            dup_groups = {k: v for k, v in groups.items() if len(v) > 1}
+            stats = st.session_state.stats
 
-            st.subheader("Same-Source Duplicate Groups")
-            st.caption(f"Found {len(dup_groups)} duplicate group(s).")
+            c1, c2, c3, c4 = st.columns(4)
 
-            if dup_groups:
-                labels = [
-                    f"{i + 1}: {k[0]} | {k[1]}>{k[2]} | {k[3][:90]} ({len(v)} records)"
-                    for i, (k, v) in enumerate(dup_groups.items())
-                ]
-                selected = st.selectbox("Select duplicate group", labels)
-                idx = labels.index(selected)
-                group_records = list(dup_groups.values())[idx]
-                st.dataframe(records_to_dataframe(group_records), use_container_width=True, hide_index=True)
-
-                keep_id = st.selectbox("Record ID to keep", [r.record_id for r in group_records])
-                if st.button("Keep Selected / Remove Others"):
-                    delete_ids = {r.record_id for r in group_records if r.record_id != keep_id}
-                    st.session_state.records = [r for r in st.session_state.records if r.record_id not in delete_ids]
-                    rerun_qa(settings)
-                    log(f"Duplicate group resolved. Kept {keep_id}, removed {len(delete_ids)}.")
-                    st.success(f"Removed {len(delete_ids)} records.")
-                    st.rerun()
-
-    with tabs[4]:
-        records = st.session_state.records
-        if not records:
-            st.info("No records loaded.")
-        else:
-            st.subheader("Edit Segment")
-            ids = [r.record_id for r in records]
-            selected_id = st.selectbox("Record ID", ids)
-            record = next(r for r in records if r.record_id == selected_id)
-
-            with st.form("edit_form"):
-                c1, c2, c3 = st.columns(3)
-                source_lang = c1.text_input("Source language", value=record.source_lang)
-                target_lang = c2.text_input("Target language", value=record.target_lang)
-                unit_id = c3.text_input("Unit ID", value=record.unit_id)
-                source = st.text_area("Source", value=record.source_text, height=160)
-                target = st.text_area("Target", value=record.target_text, height=160)
-                notes = st.text_area("Notes", value=record.notes, height=80)
-                submitted = st.form_submit_button("Save Changes")
-
-            if submitted:
-                record.source_lang = source_lang.strip()
-                record.target_lang = target_lang.strip()
-                record.unit_id = unit_id.strip()
-                record.source_text = source.strip()
-                record.target_text = target.strip()
-                record.notes = notes.strip()
-                rerun_qa(settings)
-                log(f"Edited record {selected_id}.")
-                st.success("Record updated.")
-
-            if st.button("Delete Selected Record"):
-                st.session_state.records = [r for r in st.session_state.records if r.record_id != selected_id]
-                rerun_qa(settings)
-                log(f"Deleted record {selected_id}.")
-                st.success("Record deleted.")
-                st.rerun()
-
-    with tabs[5]:
-        records = st.session_state.records
-        if not records:
-            st.info("No records loaded.")
-        else:
-            st.subheader("Export")
-
-            xlsx_report = build_xlsx_report(records, st.session_state.stats)
-            st.download_button(
-                "Download Full XLSX QA Report",
-                data=xlsx_report,
-                file_name="langops_sanitizer_report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+            c1.metric("Segments", stats["total_segments"])
+            c2.metric("Issues", stats["segments_with_issues"])
+            c3.metric("Clean", stats["clean_segments"])
+            c4.metric(
+                "Glossary Terms",
+                len(st.session_state.glossary_rules.rules)
             )
 
             st.divider()
-            st.write("Export sanitized files by type.")
+
+            if stats["issue_categories"]:
+                st.subheader("Issue Categories")
+
+                df = pd.DataFrame(
+                    stats["issue_categories"].items(),
+                    columns=["Category", "Count"]
+                )
+
+                st.bar_chart(df, x="Category", y="Count")
+
+    # ========================================================
+    # SEGMENTS
+    # ========================================================
+
+    with tabs[2]:
+
+        if not st.session_state.records:
+            st.info("No records.")
+        else:
+
+            df = records_to_dataframe(
+                st.session_state.records
+            )
+
+            filtered = filter_dataframe(df)
+
+            st.dataframe(
+                filtered,
+                use_container_width=True,
+                hide_index=True,
+                height=700
+            )
+
+    # ========================================================
+    # EXPORT
+    # ========================================================
+
+    with tabs[3]:
+
+        if not st.session_state.records:
+            st.info("Nothing to export.")
+        else:
+
+            report = build_xlsx_report(
+                st.session_state.records,
+                st.session_state.stats
+            )
+
+            st.download_button(
+                "Download XLSX QA Report",
+                data=report,
+                file_name="langops_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+            st.divider()
 
             by_type = defaultdict(list)
-            for r in records:
+
+            for r in st.session_state.records:
                 by_type[r.file_type].append(r)
 
-            for file_type, group in sorted(by_type.items()):
-                data, name, mime = write_by_type(group, file_type)
+            for file_type, group in by_type.items():
+
+                data, name, mime = write_by_type(
+                    group,
+                    file_type
+                )
+
                 st.download_button(
-                    f"Download sanitized {file_type.upper()} export ({len(group)} segments)",
+                    f"Download {file_type.upper()} Export",
                     data=data,
                     file_name=name,
                     mime=mime,
-                    use_container_width=True,
+                    use_container_width=True
                 )
 
-            st.warning("Always test-import sanitized exports into your CAT/TMS environment before replacing production files.")
+    # ========================================================
+    # LOGS
+    # ========================================================
 
-    with tabs[6]:
-        if not st.session_state.logs:
-            st.info("No logs yet.")
-        else:
-            st.text_area("Logs", "\n".join(st.session_state.logs), height=650)
+    with tabs[4]:
 
+        st.text_area(
+            "Logs",
+            "\n".join(st.session_state.logs),
+            height=700
+        )
+
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
